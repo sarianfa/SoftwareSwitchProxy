@@ -564,8 +564,8 @@ class TheServer:
  
 if __name__ == '__main__':
         server = TheServer('', 9050)
-        LLDP_TEST = 0
-        PING_TEST =1
+        LLDP_TEST = 1
+        PING_TEST =0
         try:
            if PING_TEST == 1:
            #for this to work it is important that only one ovs switch is active per each physical switch 

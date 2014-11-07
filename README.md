@@ -28,11 +28,14 @@ this port is connetced to the ovs machien through eth4. So we added the followin
 sudo ifconfig eth4 up
 sudo ovs-vsctl add-port bridge0 eth4
 
+ORDERING MATTERS
+This physical interface must be the first interface that gets added to the OVS.
+
 Depending on the number of ports on the hardware switch that you want to mirror on the software switch (in our case OVS), 
 you should add those as virtual ports on the OVS. In our case we had:
 
-sudo ovs-vsctl add-port bridge0 etp2
-sudo ovs-vsctl add-port bridge0 etp3
+sudo ovs-vsctl add-port bridge0 etp2 -- set interface etp2 type=internal
+sudo ovs-vsctl add-port bridge0 etp3 -- set interface etp3 type=internal
 
 where etp2 and etp3 are virtual interfaces that we created locally and are not connecte dto anything else in the system.
 
