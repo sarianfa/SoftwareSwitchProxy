@@ -116,7 +116,7 @@ class TheServer:
                   print "an Exteption occured", e
 
     def on_accept(self):
-        forward = Forward().start(forward_to[0], forward_to[1])
+        forward = Forward().start(controller1, controller_port)
         forward2 = Forward().start(controller2, controller_port)
         clientsock, clientaddr = self.server.accept()
         if forward:
@@ -124,20 +124,17 @@ class TheServer:
             self.input_list.append(clientsock)
             self.input_list.append(forward)
             self.input_list.append(forward2)
-           #forward directin is 1, backward direction is 2, but how you say which one in forward direction??
-           #self.channel[clientsock] could be either foward or forward1, how to decide?
-            #self.channel[clientsock] = forward
 
             self.channel[forward] = clientsock
             self.channel[forward2] = clientsock
 
             self.sockaddr[clientsock]= clientaddr
-            self.sockaddr[forward]= forward_to[0]
+            self.sockaddr[forward]= controller1
             self.sockaddr[forward2]= controller2
-            self.addrsock[forward_to[0]]= forward
+            self.addrsock[controller1]= forward
             self.addrsock[controller2]= forward2
         else:
-            print "Can't establish connection with remote server ", forward_to[0]
+            print "Can't establish connection with remote server ", controller1
             print "Closing connection with client side", clientaddr
             clientsock.close()
         if forward2:
@@ -165,7 +162,6 @@ class TheServer:
         try:
             index, p = self.parse_message()
             if p != None:
-           #t = ord(p[1])
                for outData in p:
                    if self.s in self.channel:
                       self.channel[self.s].send(outData)
@@ -564,8 +560,8 @@ class TheServer:
  
 if __name__ == '__main__':
         server = TheServer('', 9050)
-        LLDP_TEST = 1
-        PING_TEST =0
+        LLDP_TEST = 0
+        PING_TEST =1
         try:
            if PING_TEST == 1:
            #for this to work it is important that only one ovs switch is active per each physical switch 
