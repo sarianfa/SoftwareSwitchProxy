@@ -188,13 +188,20 @@ class TheServer:
         t = ord(p[1])
         packet_length = ord(p[2]) << 8 | ord(p[3])
         print "The received packet type is ",t 
+        
         message_length, xid = struct.unpack_from('!HL', p, 2)
         datapath = ProtocolDesc(version=of13.OFP_VERSION)
         version = of13.OFP_VERSION
         msg_type = t
         msg_len = len(p)
-
-
+        '''
+        if t != of13.OFPT_PACKET_IN:
+          try:
+             testmsg = of.msg_parser(datapath, ord(p[0]), msg_type, msg_len, xid, p)
+             print "testmsg ",testmsg
+          except Exception, e:
+             print e
+        '''
         if t == of13.OFPT_PACKET_IN:
           try:
              msg = of.OFPPacketIn.parser(datapath, ord(p[0]), msg_type, msg_len, xid, p)
