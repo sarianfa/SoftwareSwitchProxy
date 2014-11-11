@@ -65,6 +65,8 @@ class TheServer:
     vlanCustomerMapping={}
     customerControllerMapping = {}
     customerVlanList = {}
+    ethVlanMapping = {}#this is for loop prevention, every eth only comes from one vlan
+#the ethVlanmapping might need expiry time, in case a link breaks   
    
     def __init__(self, host, port):
         self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -200,7 +202,9 @@ class TheServer:
           except Exception, e:
              print e
              outPackets.append(p)
-             return index, outPackets 
+             return index, outPackets
+          # we need to drop the looped packets
+ 
           packed = b""
           packed += p[0:8]
           packed += struct.pack("!IH", msg.buffer_id, msg.total_len)
@@ -230,6 +234,24 @@ class TheServer:
              print eth.ethertype," is NO vlan packet (this should not happen) " 
              return index,None
           else:
+             print "in loop checking ", haddr_to_str(src) 
+             if  haddr_to_str(src) in self.ethVlanMapping:
+                  
+                for proto in pkt.protocols:
+                   print "in if part ", self.ethVlanMapping[ haddr_to_str(src)]
+                   if isinstance(proto, vlan.vlan):
+                      if proto.vid != self.ethVlanMapping[ haddr_to_str(src)]:
+                         return index,None
+                      print "dropping the above packet with src ",  haddr_to_str(src)
+                      break 
+             else:
+                for proto in pkt.protocols:
+                   if isinstance(proto, vlan.vlan):
+                      self.ethVlanMapping[ haddr_to_str(src)] = proto.vid
+                      print "in else part ", self.ethVlanMapping[ haddr_to_str(src)]
+                      break #break after the first vid 
+                   print "passed the above packet with src ", haddr_to_str(src)
+             print "afterwards above ", self.ethVlanMapping
              diff = 0 
              if arp.arp in pkt:
                  ppkt = packet.Packet()
@@ -288,13 +310,13 @@ class TheServer:
                 if src_vlan in self.vlanPortMapping:
                    new_msg.match.fields[0].value = self.vlanPortMapping[src_vlan]
                    match = of.OFPMatch(in_port= self.vlanPortMapping[src_vlan])
+                print "src_vlan ",src_vlan, " self.vlanPortMapping[src_vlan] ",self.vlanPortMapping[src_vlan]
                 new_msg.match = match
              
              else:
                 new_msg = of.OFPPacketIn( datapath, msg.buffer_id, msg_len, msg.reason, msg.table_id , msg.cookie,msg.match, msg.data)   
 
              new_msg.xid = xid
-              
              new_packed = b""
              new_packed += p[0:2]
              new_packed += struct.pack("!HL", message_length - diff, xid)
@@ -311,8 +333,10 @@ class TheServer:
                 new_packed += buffer(ppkt.data) 
              else:  
                 new_packed += new_msg.data
-              
+             #print "In new_msg ",new_msg 
              #return new_packed
+             print "IN new_msg ",new_packed
+             print "############ ", index
              outPackets.append(new_packed)
              return index, outPackets
         elif t == of13.OFPT_PACKET_OUT:
@@ -560,10 +584,10 @@ class TheServer:
  
 if __name__ == '__main__':
         server = TheServer('', 9050)
-        LLDP_TEST = 0
-        PING_TEST =1
+        LLDP_TEST = 1
+        PING_TEST =0
         try:
-           if PING_TEST == 1:
+           if PING_TEST == 1 or LLDP_TEST == 1:
            #for this to work it is important that only one ovs switch is active per each physical switch 
             for x in range(2, 5):
                 print x
