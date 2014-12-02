@@ -34,9 +34,10 @@ controller_port = 6633
 
 OFPXMC_OPENFLOW_BASIC= 0x8000
 OFPXMT_OFB_VLAN_VID= 6
-#FAKE_TYPE  = 0x0FED
-#VLAN_TYPE = 0x8100
-HW_ADDR  = '54:7f:ee:a9:5c:ee'
+BROADCAST_STR = 'ff:ff:ff:ff:ff:ff'
+BROADCAST = '\xff\xff\xff\xff\xff\xff'
+LLDP_DST_STR = '01:80:c2:00:00:0e'
+LLDP_DST = '\x01\x80\xc2\x00\x00\x0e'
 _PAD = b'\x00'
 _PAD2 = _PAD*2
 _PAD3 = _PAD*3
@@ -66,7 +67,7 @@ class TheServer:
     customerControllerMapping = {}
     customerVlanList = {}
     ethVlanMapping = {}#this is for loop prevention, every eth only comes from one vlan
-#the ethVlanmapping might need expiry time, in case a link breaks   
+                       #the ethVlanmapping might need expiry time, in case a link breaks   
    
     def __init__(self, host, port):
         self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -162,21 +163,22 @@ class TheServer:
         data = self.data
         # here we can parse and/or modify the data before send forward
         try:
-            index, p = self.parse_message()
-            if p != None:
-               for outData in p:
+            index, outp = self.parse_message()
+            if outp != None:
+               for outData in outp:
                    if self.s in self.channel:
                       self.channel[self.s].send(outData)
                    else:
                       if index != '0.0.0.0':
-                         print "Sending the previous packet to: ",index
                          self.addrsock[index].send(outData)
                       else:
                          #replicate the packet to all controllers
                          for server in self.addrsock:
                               self.addrsock[server].send(outData)
-
+            else:
+               print "outData is none"
         except Exception, e:
+            print "outData exception ",e
             return
 
     def parse_message(self):
@@ -187,256 +189,259 @@ class TheServer:
         p = self.data
         t = ord(p[1])
         packet_length = ord(p[2]) << 8 | ord(p[3])
-        print "The received packet type is ",t 
+        print origin," The received packet type is ",t 
         
         message_length, xid = struct.unpack_from('!HL', p, 2)
-        datapath = ProtocolDesc(version=of13.OFP_VERSION)
+        datapath = ProtocolDesc(version=ord(p[0]))#of13.OFP_VERSION)
         version = of13.OFP_VERSION
         msg_type = t
         msg_len = len(p)
-        '''
-        if t != of13.OFPT_PACKET_IN:
-          try:
-             testmsg = of.msg_parser(datapath, ord(p[0]), msg_type, msg_len, xid, p)
-             print "testmsg ",testmsg
-          except Exception, e:
-             print e
-        '''
         if t == of13.OFPT_PACKET_IN:
           try:
              msg = of.OFPPacketIn.parser(datapath, ord(p[0]), msg_type, msg_len, xid, p)
-             print "IN msg ", msg
+             print xid," IN msg ", msg
           except Exception, e:
              print e
              outPackets.append(p)
              return index, outPackets
           # we need to drop the looped packets
- 
-          packed = b""
-          packed += p[0:8]
-          packed += struct.pack("!IH", msg.buffer_id, msg.total_len)
-          packed += struct.pack("!BB", msg.reason, msg.table_id)
-          packed += struct.pack("!Q",msg.cookie) 
-          buf = bytearray()
-          packedmatch= msg.match.pack(buf,0)
-          packed += packedmatch
-          packed += _PAD2 
-          packed += msg.data
-
+           
+           
           dst, src, eth_type = struct.unpack_from('!6s6sH', buffer(msg.data), 0)
           in_port = msg.match.fields[0].value
-          
-          pkt = packet.Packet(msg.data)
-          eth = pkt.get_protocols(ethernet.ethernet)[0]
- 
-          i = iter(pkt)
-          eth_pkt = i.next()
+       
           arp_check = 0
           lldph_check = 0
+          fake_lldp_check = 0
+          ipv4_check = 0 
         # Ensure it's an ethernet frame.
-          assert type(eth_pkt) == ethernet.ethernet
-          next_pkt = i.next()
-            
-          if eth.ethertype != ether.ETH_TYPE_8021Q:
-             print eth.ethertype," is NO vlan packet (this should not happen) " 
-             return index,None
-          else:
-             print "in loop checking ", haddr_to_str(src) 
-             if  haddr_to_str(src) in self.ethVlanMapping:
-                  
+          try: 
+            pkt = packet.Packet(msg.data)
+            i =iter (pkt)
+            eth= i.next()
+            next_pkt = i.next()
+          except:
+            print "A none ethernet packet got has been received"
+            return index, None    
+          if eth_type == ether.ETH_TYPE_8021Q:
+              src_vlan = 0
+              nx_next_pkt = i.next()
+           
+              #loop prevention
+              print " in loop checking ", haddr_to_str(src)
+              if  haddr_to_str(src) in self.ethVlanMapping:
                 for proto in pkt.protocols:
-                   print "in if part ", self.ethVlanMapping[ haddr_to_str(src)]
                    if isinstance(proto, vlan.vlan):
                       if proto.vid != self.ethVlanMapping[ haddr_to_str(src)]:
                          return index,None
-                      print "dropping the above packet with src ",  haddr_to_str(src)
-                      break 
-             else:
+                      break
+              else:
                 for proto in pkt.protocols:
                    if isinstance(proto, vlan.vlan):
                       self.ethVlanMapping[ haddr_to_str(src)] = proto.vid
-                      print "in else part ", self.ethVlanMapping[ haddr_to_str(src)]
                       break #break after the first vid 
-                   print "passed the above packet with src ", haddr_to_str(src)
-             print "afterwards above ", self.ethVlanMapping
-             diff = 0 
-             if arp.arp in pkt:
-                 ppkt = packet.Packet()
-                 e1 = ethernet.ethernet(haddr_to_str(dst),haddr_to_str(src), ether.ETH_TYPE_ARP)
-                 ppkt.add_protocol(e1)
-                 arpp = i.next()
-        # Use IPv4 ARP wrapper from packet library directly.
-                 ppkt.add_protocol(arpp)
-                 
-                 ppkt.serialize()
-                 diff = len(msg.data) - len(ppkt.data)
-                 arp_check = 1
-             elif ipv4.ipv4 in pkt:
-                 ppkt = packet.Packet()
-                 e1 = ethernet.ethernet(haddr_to_str(dst),haddr_to_str(src), ether.ETH_TYPE_IP)
-                 ppkt.add_protocol(e1)
-                 ipp = i.next()
-                 ppkt.add_protocol(ipp)
-                 
-                 if icmp.icmp in pkt: #or udp.udp or tcp.tcp in pkt:
-                    icp = i.next()
-                    ppkt.add_protocol(icp)
-                 #else:
-                 #   print "There is no supported L4 protocol in received packet" 
-                 ppkt.serialize()
-                 diff = len(msg.data) - len(ppkt.data)
-                 
-                 ipv4_check = 1
-             #ToDo: compelete the following 
-             elif fakelldp.fakelldp or lldp.lldp in pkt:
-                 lldpp = i.next()
-                 if lldp.ethertype == ether.ETH_TYPE_FAKE_LLDP:
-                    ppkt = packet.Packet()
-                    e1 = ethernet.ethernet(haddr_to_str(dst),haddr_to_str(src), ether.ETH_TYPE_LLDP)
-                    ppkt.add_protocol(e1)
-                 
-                    ppkt.add_protocol(lldpp)
-                 #ToDo: not sure if this generates the correct packet type
-                    ppkt.serialize()
-                    diff = len(msg.data) - len(ppkt.data)
-                
-                    fake_lldp_check = 1 
-                    print "discovered (fake)lldp packet"
-
-             src_vlan = 0
-             for proto in pkt.protocols:
+                  
+              for proto in pkt.protocols:
+                   
                    if isinstance(proto, vlan.vlan):
                       src_vlan = proto.vid
                       customerid = self.vlanCustomerMapping[src_vlan]
                       controllerSocketid = self.customerControllerMapping[customerid]
                       index = controllerSocketid
-                      break #this should make sure only first vlan id is read 
-             if arp_check == 1 or ipv4_check == 1 or fake_lldp_check == 1:
-                new_msg = of.OFPPacketIn( datapath, msg.buffer_id, msg_len - diff, msg.reason, msg.table_id , msg.cookie,msg.match, buffer(ppkt.data)) 
-                match = msg.match
-                if src_vlan in self.vlanPortMapping:
-                   new_msg.match.fields[0].value = self.vlanPortMapping[src_vlan]
+                      print "index is ", index
+                      break
+              if src_vlan in self.vlanPortMapping:
                    match = of.OFPMatch(in_port= self.vlanPortMapping[src_vlan])
-                print "src_vlan ",src_vlan, " self.vlanPortMapping[src_vlan] ",self.vlanPortMapping[src_vlan]
-                new_msg.match = match
-             
-             else:
-                new_msg = of.OFPPacketIn( datapath, msg.buffer_id, msg_len, msg.reason, msg.table_id , msg.cookie,msg.match, msg.data)   
+                   print " dl_vid ",src_vlan, " self.vlanPortMapping[src_vlan] ",self.vlanPortMapping[src_vlan]
+              packed = b""
+              if isinstance(nx_next_pkt,lldp.lldp):
+                 packed += struct.pack('!6s6sH', LLDP_DST,src,ether.ETH_TYPE_LLDP)
+                 #return index, None #only for testing
+              elif isinstance(nx_next_pkt,arp.arp):
+                 packed += struct.pack('!6s6sH', dst,src,ether.ETH_TYPE_ARP)
+              else:#we assume everything else is IPv4
+                 packed += struct.pack('!6s6sH', dst,src,ether.ETH_TYPE_IP)
 
-             new_msg.xid = xid
-             new_packed = b""
-             new_packed += p[0:2]
-             new_packed += struct.pack("!HL", message_length - diff, xid)
-             new_packed += struct.pack("!IH", new_msg.buffer_id, new_msg.total_len)
-             new_packed += struct.pack("!BB", new_msg.reason, new_msg.table_id)
-             new_packed += struct.pack("!Q",new_msg.cookie)
-             buf = bytearray()
-             new_packedmatch= new_msg.match.pack(buf,0)
-
-             new_packed += new_packedmatch
-             new_packed += _PAD2 # this seem to have been included above
-             buf = bytearray()
-             if arp_check == 1:
-                new_packed += buffer(ppkt.data) 
-             else:  
-                new_packed += new_msg.data
-             #print "In new_msg ",new_msg 
-             #return new_packed
-             print "IN new_msg ",new_packed
-             print "############ ", index
-             outPackets.append(new_packed)
-             return index, outPackets
+              #removing the vlan header
+              newPayload = b""
+              newPayload += p[0:2]
+              newPayload += struct.pack("!HL", message_length - 4, xid)
+              newPayload += struct.pack("!IH", msg.buffer_id, msg.total_len - 4) 
+              newPayload += p[14:24]
+              buf = bytearray()
+              new_packedmatch= match.pack(buf,0)
+              newPayload += new_packedmatch
+              newPayload += p[24 + len(buf):of13.OFP_HEADER_SIZE+of13.OFP_PACKET_IN_SIZE + 2]
+              newPayload +=packed
+              newPayload +=p[of13.OFP_HEADER_SIZE+of13.OFP_PACKET_IN_SIZE + 20:]
+              
+              outPackets.append(newPayload)
+              return index,outPackets 
+          elif eth_type != ether.ETH_TYPE_8021Q:
+             print eth.ethertype," is NO vlan packet (this should not happen) "
+             return index, None  
         elif t == of13.OFPT_PACKET_OUT:
              try:
                 msg = of.OFPPacketOut.parser(datapath, ord(p[0]), msg_type, msg_len, xid, p)
                 print "OUT msg ", msg
              except Exception, e:
                 print e
-                #return p
                 outPackets.append(p)
                 return index, outPackets
+            
              flood_action = 1
+             end1 =0 
+             ends = [] 
              updated_actions = []
+               
              for a in msg.actions:
                  if a.type == 65535 :#Flood
                     flood_action = 1
                  else:
                     print "non flood action" 
              dl_vid = [] 
-              #ToDo: for lldp packets change the type, also check the outport
-              #ToDo: a flood action should result to multiple port forwards
-              #The following does not cover the packets that come from the controller
              lldp_check = 0
-             updated_data = msg.data
-             pkt = packet.Packet(msg.data) 
-             i = iter(pkt)
-             eth_pkt = i.next()
-             next_pkt = i.next()
+             arp_check = 0
+             ip_check = 0
+             try:
+                dst, src, eth_type = struct.unpack_from('!6s6sH', buffer(msg.data), 0) 
+                pkt = packet.Packet(msg.data) 
+                i = iter(pkt)
+                eth_pkt = i.next()
+                next_pkt = i.next()
+                sec_pkt = None 
+             except:
+                #the packet out message does not contain an ethernet packet
+                return index, None
              eth = pkt.get_protocols(ethernet.ethernet)[0]
              if eth.ethertype == ether.ETH_TYPE_LLDP: 
-                print flood_action," LLDP packet ", eth
-                dst, src, eth_type = struct.unpack_from('!6s6sH', buffer(msg.data), 0)
+                packed = b""
+                packed += struct.pack('!6s6sH', BROADCAST,src,ether.ETH_TYPE_LLDP)
+                lldp_check = 1
+                if msg.in_port != of13.OFPP_CONTROLLER:
+                   return index, None # there could not be an out message from anyone except the controller
+             elif eth.ethertype == ether.ETH_TYPE_ARP:
+                packed = b""
+                packed += struct.pack('!6s6sH', dst,src,ether.ETH_TYPE_ARP)
+                arp_check = 1
+                print "Arp packet from the controller"  
+             elif eth.ethertype == ether.ETH_TYPE_IP:
+                packed = b""
+                packed += struct.pack('!6s6sH', BROADCAST,src,ether.ETH_TYPE_IP)
+                ip_check = 1 
+                print "IP packet from the controller"
+                if icmp.icmp in pkt:
+                   print "ICMP packet"
 
-                ppkt = packet.Packet()
-                e1 = ethernet.ethernet(haddr_to_str(dst),haddr_to_str(src), ether.ETH_TYPE_FAKE_LLDP)
-                ppkt.add_protocol(e1)
-        # Use IPv4 ARP wrapper from packet library directly.
-                ppkt.add_protocol(next_pkt)
-                ppkt.serialize()
-                updated_data = buffer(ppkt.data) 
-                lldp_check = 1 
+             if lldp_check == 1:#this lldp packet has originated from the controller
+                 print "lldp check 1 ", len(dl_vid)
+                 spliter =  msg.data[0:6]#this is LLDP_DST
+                 payloads = msg.data.split(spliter)
+                 updated_actions = []
+                 paycount = 0
+                 for pay in payloads:
+                  if paycount == 0:
+                     paycount += 1
+                  else: 
+                     updated_actions = []  
+                     dl_vid = []
+                     packed = b""
+                     packed += struct.pack('!6s6sH', BROADCAST,src,ether.ETH_TYPE_LLDP)
+                     new_pay = b""
+                     new_pay += packed
+                     new_pay += pay[8:]
+                     pktt = packet.Packet(new_pay)
+                     i = iter(pktt)
+                     eth_pkt = i.next()
+                     next_pkt = i.next()    
+                     tlv_port_id = next_pkt.tlvs[1].port_id
+                     print "tlv_port_id: ", tlv_port_id
+                     try:
+                        outport = int(tlv_port_id)
+                     except :
+                        outport = 0
+                     if outport in self.portVlanMapping:
+                        dl_vid.append(self.portVlanMapping[outport])
+                     if eth.ethertype != ether.ETH_TYPE_8021Q:
+                        c = of.OFPActionPushVlan(ether.ETH_TYPE_8021Q)
+                        c.len = of13.OFP_ACTION_PUSH_SIZE
+                        c.type = of13.OFPAT_PUSH_VLAN
+                        updated_actions.append(c)
 
-             if flood_action == 1:
+             
+                     for vid in dl_vid:
+                         f = of.OFPMatchField.make(of13.OXM_OF_VLAN_VID, vid)
+                         updated_actions.append(of.OFPActionSetField(f))
+                         if msg.in_port == 1:
+                            updated_actions.append(of.OFPActionOutput(of13.OFPP_IN_PORT))
+                         else:
+                            updated_actions.append(of.OFPActionOutput(1))
+                     if outport != 0 and outport != 1:
+                        t_msg= of.OFPPacketOut(
+                datapath= datapath, in_port=of13.OFPP_CONTROLLER,
+                buffer_id= msg.buffer_id,#of13.OFP_NO_BUFFER,
+                actions=updated_actions,
+                data=new_pay)
+                        print "OUT dl_vid ", self.portVlanMapping[outport]
+                        t_msg.serialize()
+                        outPackets.append(t_msg.buf)
+                 if len(outPackets) == 0:
+                    return index,None
+                 
+                 return index,outPackets
+             elif flood_action == 1:# for the pacets that are not in lldp_check we check if the action is flood 
                 if msg.in_port in self.portVlanMapping:
+                  #this probably is not going to happen
                   originVlan = self.portVlanMapping[msg.in_port]
                   originCustomer = self.vlanCustomerMapping[originVlan]
                   for vlanId in self.customerVlanList[originCustomer] :
                     if vlanId != originVlan:
                        dl_vid.append(vlanId)
-                elif lldp_check == 1:#this lldp packet has originated from the controller
-                  tlv_port_id = next_pkt.tlvs[1].port_id
-                  print "tlv_port_id: ", tlv_port_id
-                  try:
-                     outport = int(tlv_port_id)
-                  except :
-                     outport = 0  
-                  if outport in self.portVlanMapping:
-                        dl_vid.append(self.portVlanMapping[outport])
-                        print "added vid is ", self.portVlanMapping[outport]
                 else:#this packet has originated from the controller
                   for port in self.portVlanMapping:
                     dl_vid.append(self.portVlanMapping[port]) 
 
-             #0x8100
-             if eth.ethertype != ether.ETH_TYPE_8021Q:
-                c = of.OFPActionPushVlan(ether.ETH_TYPE_8021Q)
-                c.len = of13.OFP_ACTION_PUSH_SIZE
-                c.type = of13.OFPAT_PUSH_VLAN
-                updated_actions.append(c)
-            
- 
-             for vid in dl_vid: 
-                f = of.OFPMatchField.make(of13.OXM_OF_VLAN_VID, vid)
-                updated_actions.append(of.OFPActionSetField(f))
-                if msg.in_port == 1:
-                   updated_actions.append(of.OFPActionOutput(of13.OFPP_IN_PORT))
-                else:
-                   updated_actions.append(of.OFPActionOutput(1))
+             if arp_check == 1 or ip_check == 1:
+                if flood_action != 1: #currently we only handle the flooding case from the controller  
+                     print "no flood in arp check ip check"
+                else: 
+                     print "arp check ip check"
+                     updated_actions = []
+                     
+                     c = of.OFPActionPushVlan(ether.ETH_TYPE_8021Q)
+                     c.len = of13.OFP_ACTION_PUSH_SIZE
+                     c.type = of13.OFPAT_PUSH_VLAN
+                     updated_actions.append(c)
 
-             if eth.ethertype != ether.ETH_TYPE_8021Q:
-               new_msg = of.OFPPacketOut(datapath, msg.buffer_id,
-                                          msg.in_port, updated_actions, updated_data)
-               new_msg.xid = xid
-               
-               new_msg.serialize()
-             
-               #return new_msg.buf
-               outPackets.append(new_msg.buf)
-               return index, outPackets
+
+                     for vid in dl_vid:
+                         f = of.OFPMatchField.make(of13.OXM_OF_VLAN_VID, vid)
+                         updated_actions.append(of.OFPActionSetField(f))
+                         if msg.in_port == 1:
+                            updated_actions.append(of.OFPActionOutput(of13.OFPP_IN_PORT))
+                         else:
+                            updated_actions.append(of.OFPActionOutput(1))
+                     
+                     t_msg= of.OFPPacketOut(
+                datapath=datapath, in_port=of13.OFPP_CONTROLLER,
+                buffer_id=msg.buffer_id,#of13.OFP_NO_BUFFER,
+                actions=updated_actions,
+                data=msg.data)
+                     t_msg.serialize()
+                     outPackets.append(t_msg.buf)
+                     if len(outPackets) == 0:
+                        return index,None
+                     else:
+                        print "sending out arp packet"
+                        return index,outPackets
+             elif eth.ethertype == ether.ETH_TYPE_8021Q:#if lldp_check == 1 
+                   return index,None  
              else:
-               print "A vlan packet is sent from the controller! For now we do not expect this."
-               outPackets.append(p)
-               return index, outPackets 
+               print "The controller packet either has a type that is not handled yet or sending a non-flood action!"
+               return index, None#outPackets
+             
+             print "Ultimately the code should never come here" 
+             return index,None    
         elif t == of13.OFPT_FLOW_MOD:
           try: 
              msg = of.OFPFlowMod.parser( datapath, version, msg_type, msg_len, xid, p)
@@ -467,7 +472,6 @@ class TheServer:
             datapath=datapath, cookie=msg.cookie, cookie_mask=msg.cookie_mask, table_id=msg.table_id,command=msg.command, idle_timeout=msg.idle_timeout, hard_timeout=msg.hard_timeout,priority=msg.priority, buffer_id=msg.buffer_id,out_port=msg.out_port,out_group=msg.out_group,flags=msg.flags, match=msg.match, instructions=new_inst)
           new_msg.xid = xid
           new_msg.serialize()
-          #return new_msg.buf
           outPackets.append(new_msg.buf)
           return index, outPackets 
 
@@ -485,13 +489,14 @@ class TheServer:
         elif t == of13.OFPT_MULTIPART_REPLY:
           try:
                 msg = of.OFPMultipartReply.parser( datapath, version, msg_type, msg_len, xid, p)
+                print "OFPT_MULTIPART_REPLY ",msg 
           except Exception, e:
                 print e
                 outPackets.append(p)
                 return index, outPackets
           outPackets.append(p)
           return index, outPackets
-          #right now we return before this because the rest is not desitable  
+          #right now we return before this because the rest is not desirable  
           if msg.type == of13.OFPMP_PORT_DESC:
              print "PortDesc might need to be updated"
              for port in msg.body: 
@@ -537,7 +542,10 @@ class TheServer:
        
           if msg.type == of13.OFPMP_PORT_STATS:
              print "PortStat might need to be updated"
-              
+
+             outPackets.append(p)
+             return index, outPackets 
+
              for port in msg.body:
                  if port.port_no == 1:
                     rx_packets = port.rx_packets
@@ -594,18 +602,15 @@ if __name__ == '__main__':
         LLDP_TEST = 0
         PING_TEST =1
         try:
-           if PING_TEST == 1:
+           if PING_TEST == 1 :
            #for this to work it is important that only one ovs switch is active per each physical switch 
             for x in range(2, 5):
                 print x
                 server.configure_port_mapping(x, x+3)
                 server.configure_vlan_mapping( x+3,x)
-                #server.configure_vlan_customer_mapping( x+3,x+4000)
                 server.configure_vlan_customer_mapping( x+3,4002)
-                server.configure_customer_vlan_list( 4002, x+3) #this is list unlike others 
+                server.configure_customer_vlan_list( 4002, x+3) #this is a list unlike others 
             server.configure_customer_controller_mapping(4002, controller1)
-            #for multiple customers and controllers the following should go to different controller
-            #server.configure_customer_controller_mapping(4002, controller2)     
            elif LLDP_TEST == 1:
             for x in range(2, 4):
                 print x
@@ -617,7 +622,6 @@ if __name__ == '__main__':
             x = 4
             server.configure_port_mapping(x, x+3)
             server.configure_vlan_mapping( x+3,x)
-                #server.configure_vlan_customer_mapping( x+3,x+4000)
             server.configure_vlan_customer_mapping( x+3,4003)
             server.configure_customer_vlan_list( 4003, x+3)
 
@@ -625,7 +629,6 @@ if __name__ == '__main__':
 
             server.configure_customer_controller_mapping(4003, controller2)     
            else:
-            #this shoulrk but ovs's must be on different switches to prevent loops, or may be not? anyways there will be a loop?
             for x in range(2, 4):
                 print x
                 server.configure_port_mapping(x, x+3)
@@ -634,11 +637,9 @@ if __name__ == '__main__':
                 server.configure_customer_vlan_list( 4002, x+3)
             server.configure_customer_controller_mapping(4002, controller1)     
             server.configure_customer_controller_mapping(4003, controller2)
-            #for x= 4 just add this to one of existing customers
             x = 4
             server.configure_port_mapping(x, x+3)
             server.configure_vlan_mapping( x+3,x)
-                #server.configure_vlan_customer_mapping( x+3,x+4000)
             server.configure_vlan_customer_mapping( x+3,4003)
             server.configure_customer_vlan_list( 4003, x+3)
 

@@ -2344,7 +2344,7 @@ class OFPPacketOut(MsgBase):
     #Somaya:
     @classmethod
     def _unpack_header ( self,raw, offset):
-        offset,(self.version, self.header_type, length, self.xid) = \
+        offset,(version, header_type, length, xid) = \
         _unpack("!BBHL", raw, offset)
         return offset,length
     @classmethod
@@ -2366,7 +2366,7 @@ class OFPPacketOut(MsgBase):
           if (len(b) - offset) < l:
              print "underrun buffer 2"
              return offset, actions
-          print "action length ", l
+          print "unpack action length ", l
           '''
           a = _action_type_to_class.get(t)
           if a is None:
@@ -2390,7 +2390,7 @@ class OFPPacketOut(MsgBase):
                                                msg_len, xid, raw)
        offset = 0
        try:
-           (msg.buffer_id, msg.in_port, actions_len) = struct.unpack_from(ofproto.OFP_PACKET_OUT_PACK_STR, raw, ofproto.OFP_HEADER_SIZE)
+           (msg.buffer_id, msg.in_port, msg.actions_len) = struct.unpack_from(ofproto.OFP_PACKET_OUT_PACK_STR, raw, ofproto.OFP_HEADER_SIZE)
 
 #           res = OFPInstructionActions.parser(raw, ofproto.OFP_HEADER_SIZE)
        
@@ -2401,22 +2401,24 @@ class OFPPacketOut(MsgBase):
 
            _offset = offset
            offset,length = OFPPacketOut._unpack_header(raw, offset)
+           print offset," parser.length: ",length, " parser.msg_len: ", msg_len 
+
            offset,(msg.buffer_id, msg.in_port, actions_len,pad0, pad1) = \
             _unpack("!IIHHL", raw, offset)
-         
+           print offset," parser2length: ",length, " parser.msg_len: ", msg_len 
+ 
            msg.actions = []
    
            res = OFPInstructionActions.parser(raw, offset)
 
            for a in res.actions:
             msg.actions.append(a)
-            #print "res port ", a.port
 
            #offset,msg.actions = self._unpack_actions(raw, actions_len, offset)
            offset = offset + res.len
-           #for a in msg.actions:
-            #print "msg action type ", a 
-           remaining = length - (offset - _offset)
+           for a in msg.actions:
+            print "msg action type ", a 
+           remaining = msg_len - (offset - _offset)
            if remaining <= 0:
               msg.data = None
            else:
