@@ -233,6 +233,7 @@ class TheServer:
                 for proto in pkt.protocols:
                    if isinstance(proto, vlan.vlan):
                       if proto.vid != self.ethVlanMapping[ haddr_to_str(src)]:
+                         print "loop prevention discovered a loop"
                          return index,None
                       break
               else:
@@ -252,16 +253,18 @@ class TheServer:
                       break
               if src_vlan in self.vlanPortMapping:
                    match = of.OFPMatch(in_port= self.vlanPortMapping[src_vlan])
-                   print " dl_vid ",src_vlan, " self.vlanPortMapping[src_vlan] ",self.vlanPortMapping[src_vlan]
+                   print " src_vid ",src_vlan, " self.vlanPortMapping[src_vlan] ",self.vlanPortMapping[src_vlan]
               packed = b""
               if isinstance(nx_next_pkt,lldp.lldp):
                  packed += struct.pack('!6s6sH', LLDP_DST,src,ether.ETH_TYPE_LLDP)
+                 print "LLDP packet"
                  #return index, None #only for testing
               elif isinstance(nx_next_pkt,arp.arp):
                  packed += struct.pack('!6s6sH', dst,src,ether.ETH_TYPE_ARP)
+                 print "ARP packet"       
               else:#we assume everything else is IPv4
                  packed += struct.pack('!6s6sH', dst,src,ether.ETH_TYPE_IP)
-
+                 print "IP packet"
               #removing the vlan header
               newPayload = b""
               newPayload += p[0:2]
@@ -276,6 +279,7 @@ class TheServer:
               newPayload +=p[of13.OFP_HEADER_SIZE+of13.OFP_PACKET_IN_SIZE + 20:]
               
               outPackets.append(newPayload)
+              print "here 3" 
               return index,outPackets 
           elif eth_type != ether.ETH_TYPE_8021Q:
              print eth.ethertype," is NO vlan packet (this should not happen) "
@@ -405,7 +409,7 @@ class TheServer:
                 if flood_action != 1: #currently we only handle the flooding case from the controller  
                      print "no flood in arp check ip check"
                 else: 
-                     print "arp check ip check"
+                     print "arp and ip check"
                      updated_actions = []
                      
                      c = of.OFPActionPushVlan(ether.ETH_TYPE_8021Q)
@@ -415,6 +419,7 @@ class TheServer:
 
 
                      for vid in dl_vid:
+                         print "forwarding to vid ", vid
                          f = of.OFPMatchField.make(of13.OXM_OF_VLAN_VID, vid)
                          updated_actions.append(of.OFPActionSetField(f))
                          if msg.in_port == 1:
@@ -604,7 +609,7 @@ if __name__ == '__main__':
         try:
            if PING_TEST == 1 :
            #for this to work it is important that only one ovs switch is active per each physical switch 
-            for x in range(2, 5):
+            for x in range(2, 4):
                 print x
                 server.configure_port_mapping(x, x+3)
                 server.configure_vlan_mapping( x+3,x)
